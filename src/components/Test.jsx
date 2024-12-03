@@ -1,6 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument, rgb } from 'pdf-lib';
+import {
+  Highlighter,
+  Pen,
+  Type,
+  Trash2,
+  Download,
+  ChevronLeft,
+  ChevronRight,
+} from 'lucide-react';
 // Configure PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
@@ -301,6 +310,21 @@ const PDFViewer = ({ pdfUrl = '../src/assets/test.pdf' }) => {
 
       // Get the current page
       const page = pdfDoc.getPage(pageNum - 1);
+      const pageHeight = page.getHeight();
+      const pageWidth = page.getWidth();
+      const canvas = canvasRef.current;
+      const canvasHeight = canvas.height;
+      const canvasWidth = canvas.width;
+
+      // Calculate scaling factors
+      const scaleX = pageWidth / canvasWidth;
+      const scaleY = pageHeight / canvasHeight;
+
+      // Transform canvas coordinates to PDF page coordinates
+      const transformCoordinate = (x, y) => ({
+        x: x * scaleX,
+        y: pageHeight - y * scaleY,
+      });
 
       // Add annotations to the page
       annotations
@@ -310,12 +334,23 @@ const PDFViewer = ({ pdfUrl = '../src/assets/test.pdf' }) => {
             case 'highlight': {
               // Convert the user selected color to RGB
               const color = hexToRgb(annotation.color);
+
+              // Transform start and end coordinates
+              const start = transformCoordinate(
+                annotation.start.x,
+                annotation.start.y
+              );
+              const end = transformCoordinate(
+                annotation.end.x,
+                annotation.end.y
+              );
+
               page.drawRectangle({
-                x: annotation.start.x,
-                y: page.getHeight() - annotation.start.y,
-                width: Math.abs(annotation.end.x - annotation.start.x),
-                height: Math.abs(annotation.end.y - annotation.start.y),
-                color: rgb(color.r, color.g, color.b), // Use exact user selected color
+                x: Math.min(start.x, end.x),
+                y: Math.min(start.y, end.y),
+                width: Math.abs(end.x - start.x),
+                height: Math.abs(end.y - start.y),
+                color: rgb(color.r, color.g, color.b),
                 opacity: 0.35,
               });
               break;
@@ -323,21 +358,27 @@ const PDFViewer = ({ pdfUrl = '../src/assets/test.pdf' }) => {
             case 'text': {
               // Convert the user selected color to RGB
               const color = hexToRgb(annotation.color);
+              const transformedPos = transformCoordinate(
+                annotation.position.x,
+                annotation.position.y
+              );
+
               page.drawText(annotation.text, {
-                x: annotation.position.x,
-                y: page.getHeight() - annotation.position.y,
+                x: transformedPos.x,
+                y: transformedPos.y,
                 size: 16,
-                color: rgb(color.r, color.g, color.b), // Use exact user selected color
+                color: rgb(color.r, color.g, color.b),
               });
               break;
             }
             case 'draw': {
               // Convert the user selected color to RGB
               const color = hexToRgb(annotation.color);
-              const scaledPoints = annotation.points.map(({ x, y }) => ({
-                x,
-                y: page.getHeight() - y,
-              }));
+
+              // Transform points
+              const scaledPoints = annotation.points.map((point) =>
+                transformCoordinate(point.x, point.y)
+              );
 
               for (let i = 1; i < scaledPoints.length; i++) {
                 const prev = scaledPoints[i - 1];
@@ -346,7 +387,7 @@ const PDFViewer = ({ pdfUrl = '../src/assets/test.pdf' }) => {
                   start: prev,
                   end: curr,
                   thickness: annotation.width,
-                  color: rgb(color.r, color.g, color.b), // Use exact user selected color
+                  color: rgb(color.r, color.g, color.b),
                 });
               }
               break;
@@ -370,71 +411,104 @@ const PDFViewer = ({ pdfUrl = '../src/assets/test.pdf' }) => {
   };
 
   return (
-    <div className='w-full max-w-4xl mx-auto p-4'>
+    <div className="w-full max-w-6xl mx-auto p-4">
       {/* Error Display */}
       {error && (
-        <div className='bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4'>
+        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
           {error}
         </div>
       )}
-
-      {/* Toolbar */}
-      <div className='mb-4 flex gap-2 flex-wrap items-center'>
-        {/* Tool Selection Buttons */}
-        {['highlight', 'draw', 'text'].map((tool) => (
-          <button
-            key={tool}
-            className={`px-4 py-2 rounded ${
-              currentTool === tool ? 'bg-blue-700' : 'bg-blue-500'
-            } text-white hover:bg-blue-600 capitalize`}
-            onClick={() => setCurrentTool(tool)}
-          >
-            {tool}
-          </button>
-        ))}
-
-        {/* Color Picker */}
-        <div className='flex items-center gap-2'>
-          <label>Color:</label>
-          <input
-            type='color'
-            value={annotationColor}
-            onChange={(e) => setAnnotationColor(e.target.value)}
-            className='h-10 w-16'
+  
+      {/* Flexbox Container */}
+      <div className="flex gap-4 custom-height overflow-hidden">
+        {/* PDF Viewer */}
+        <div className="flex-grow relative border border-gray-300 rounded custom-boxShadow">
+          <canvas
+            ref={canvasRef}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+            className={`cursor-${currentTool === 'text' ? 'text' : 'crosshair'}`}
           />
         </div>
-
-        {/* Utility Buttons */}
-        <button
-          className='px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600'
-          onClick={clearAllAnnotations}
-        >
-          Clear All
-        </button>
-        <button
-          className='px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600'
-          onClick={downloadAnnotatedPDF}
-        >
-          Download PDF
-        </button>
+  
+        {/* Toolbar */}
+        <div className="flex-shrink-0 p-4 bg-gray-100 border border-gray-300 rounded custom-boxShadow">
+          <h3 className="text-lg font-bold mb-4">Tools</h3>
+          
+          {/* Tool Selection Buttons */}
+          <div className="mb-4 flex flex-col gap-2">
+            <button
+              key="highlight"
+              className={`px-3 py-2 rounded flex items-center gap-2 ${
+                currentTool === 'highlight' ? 'bg-green-700' : 'bg-green-500'
+              } text-white hover:bg-green-600`}
+              onClick={() => setCurrentTool('highlight')}
+              title="Highlight"
+            >
+              <Highlighter size={18} />
+              Highlight
+            </button>
+  
+            <button
+              key="draw"
+              className={`px-3 py-2 rounded flex items-center gap-2 ${
+                currentTool === 'draw' ? 'bg-purple-700' : 'bg-purple-500'
+              } text-white hover:bg-purple-600`}
+              onClick={() => setCurrentTool('draw')}
+              title="Draw"
+            >
+              <Pen size={18} />
+              Draw
+            </button>
+  
+            <button
+              key="text"
+              className={`px-3 py-2 rounded flex items-center gap-2 ${
+                currentTool === 'text' ? 'bg-blue-700' : 'bg-blue-500'
+              } text-white hover:bg-blue-600`}
+              onClick={() => setCurrentTool('text')}
+              title="Text Annotation"
+            >
+              <Type size={18} />
+              Text
+            </button>
+          </div>
+  
+          {/* Color Picker */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium mb-1">Color:</label>
+            <input
+              type="color"
+              value={annotationColor}
+              onChange={(e) => setAnnotationColor(e.target.value)}
+              className="h-10 w-full border border-gray-300 rounded"
+            />
+          </div>
+  
+          {/* Utility Buttons */}
+          <div className="flex flex-col gap-2">
+            <button
+              className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+              onClick={clearAllAnnotations}
+            >
+              Clear All
+            </button>
+            <button
+              className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+              onClick={downloadAnnotatedPDF}
+            >
+              Download PDF
+            </button>
+          </div>
+        </div>
       </div>
-
-      {/* PDF Canvas */}
-      <div className='relative border border-gray-300 rounded'>
-        <canvas
-          ref={canvasRef}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-          className={`cursor-${currentTool === 'text' ? 'text' : 'crosshair'}`}
-        />
-      </div>
-
+  
       {/* Page Navigation */}
-      <div className='mt-4 flex justify-center items-center gap-4'>
+      <div className="mt-4 flex justify-center items-center gap-4">
         <button
-          className='px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600'
+          className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
           onClick={() => {
             const newPage = pageNum - 1;
             if (newPage >= 1) {
@@ -446,11 +520,11 @@ const PDFViewer = ({ pdfUrl = '../src/assets/test.pdf' }) => {
         >
           Previous
         </button>
-        <span className='py-2'>
+        <span className="py-2">
           Page {pageNum} of {totalPages}
         </span>
         <button
-          className='px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600'
+          className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
           onClick={() => {
             const newPage = pageNum + 1;
             if (newPage <= totalPages) {
@@ -465,6 +539,7 @@ const PDFViewer = ({ pdfUrl = '../src/assets/test.pdf' }) => {
       </div>
     </div>
   );
+  
 };
 
 export default PDFViewer;
